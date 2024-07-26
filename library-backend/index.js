@@ -118,7 +118,7 @@ const typeDefs = `
   type Book {
     title: String!
     published: Int!
-    author: String!
+    author: Author!
     id: ID!
     genres: [String]!
   }
@@ -142,6 +142,7 @@ const typeDefs = `
     allBooks (author: String, genre: String): [Book!]!
     allAuthors: [Author!]!
     me: User
+    allGenres: [String]!
   }
   type Mutation {
     addBook(
@@ -171,21 +172,23 @@ const resolvers = {
     authorCount : async () => await Author.collection.countDocuments(),
     allBooks: async(root, args) => {
       if (!args.author && !args.genre) {
-        return await Book.find({})
+        const booklist = await Book.find({}).populate('author')
+        return booklist
       } else if (args.author && !args.genre) { 
         const authorObject = await Author.findOne({ name: args.author})
-        return await Book.find({ author: authorObject._id })
+        return await Book.find({ author: authorObject._id }).populate('author')
       } else if (!args.author && args.genre) { 
-        return await Book.find({ genres: {  $all: args.genre } })
+        return await Book.find({ genres: {  $all: args.genre } }).populate('author')
       } else {
         const authorObject = await Author.findOne({ name: args.author})
-        return await Book.find({ author: authorObject._id, genres: {  $all: args.genre } })
+        return await Book.find({ author: authorObject._id, genres: {  $all: args.genre } }).populate('author')
       }
     },
     allAuthors: async () => await Author.find({}),
     me: (root, args, context) => {
       return context.currentUser
     },
+    allGenres: async () => await Book.distinct( "genres" ),
   },
   Author: {
     bookCount: async (root) => {
@@ -221,7 +224,7 @@ const resolvers = {
           }
         })
       }
-      return book
+      return book.populate('author')
     },
     editAuthor: async (root, args, context) => {
       const currentUser = context.currentUser
