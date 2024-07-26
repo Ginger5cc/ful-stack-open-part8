@@ -1,7 +1,28 @@
 const { ApolloServer } = require('@apollo/server')
 const { startStandaloneServer } = require('@apollo/server/standalone')
-const { v1: uuid } = require('uuid')
 const { GraphQLError } = require('graphql')
+
+const mongoose = require('mongoose')
+mongoose.set('strictQuery', false)
+const Book = require('./models/book')
+const Author = require('./models/author')
+const User = require('./models/user')
+
+const jwt = require('jsonwebtoken')
+
+require('dotenv').config()
+
+const MONGODB_URI = process.env.MONGODB_URI
+
+console.log('connecting to', MONGODB_URI)
+
+mongoose.connect(MONGODB_URI)
+  .then(() => {
+    console.log('connected to MongoDB')
+  })
+  .catch((error) => {
+    console.log('error connection to MongoDB:', error.message)
+  })
 
 let authors = [
   {
@@ -29,19 +50,7 @@ let authors = [
   },
 ]
 
-/*
- * Suomi:
- * Saattaisi olla järkevämpää assosioida kirja ja sen tekijä tallettamalla kirjan yhteyteen tekijän nimen sijaan tekijän id
- * Yksinkertaisuuden vuoksi tallennamme kuitenkin kirjan yhteyteen tekijän nimen
- *
- * English:
- * It might make more sense to associate a book with its author by storing the author's id in the context of the book instead of the author's name
- * However, for simplicity, we will store the author's name in connection with the book
- *
- * Spanish:
- * Podría tener más sentido asociar un libro con su autor almacenando la id del autor en el contexto del libro en lugar del nombre del autor
- * Sin embargo, por simplicidad, almacenaremos el nombre del autor en conexión con el libro
-*/
+
 
 let books = [
   {
@@ -95,6 +104,16 @@ let books = [
   },
 ]
 
+/*
+books.forEach( async(n) => {
+  await Book.deleteMany({})
+  const authorObject = await Author.findOne({ name: n.author})
+  const bookObject = new Book({...n, author: authorObject._id })
+  bookObject.save()
+}) */
+
+
+
 const typeDefs = `
   type Book {
     title: String!
@@ -104,16 +123,25 @@ const typeDefs = `
     genres: [String]!
   }
   type Author {
-  name: String!
+    name: String!
+    id: ID!
+    born: Int
+    bookCount: Int
+  }
+  type User {
+  username: String!
+  favoriteGenre: String!
   id: ID!
-  born: Int
-  bookCount: Int
+  }
+  type Token {
+    value: String!
   }
   type Query {
     bookCount: Int
     authorCount: Int
     allBooks (author: String, genre: String): [Book!]!
     allAuthors: [Author!]!
+    me: User
   }
   type Mutation {
     addBook(
@@ -122,65 +150,137 @@ const typeDefs = `
       author: String!
       genres: [String]!
     ): Book
-
     editAuthor(
       name: String!
       setBornTo: Int!
     ): Author
+    createUser(
+      username: String!
+      favoriteGenre: String!
+    ): User
+    login(
+      username: String!
+      password: String!
+  ): Token
   }
 `
 
 const resolvers = {
   Query: {
-    bookCount: () => books.length,
-    authorCount : () => authors.length,
-    allBooks: (root, args) => {
-      let booklist = [...books]
-      if (args.author) { booklist = booklist.filter( n => n.author === args.author)} 
-      if (args.genre) { booklist = booklist.filter( n => n.genres.find( g => g === args.genre ) )} 
-      return booklist
+    bookCount: async () => await Book.collection.countDocuments(),
+    authorCount : async () => await Author.collection.countDocuments(),
+    allBooks: async(root, args) => {
+      if (!args.author && !args.genre) {
+        return await Book.find({})
+      } else if (args.author && !args.genre) { 
+        const authorObject = await Author.findOne({ name: args.author})
+        return await Book.find({ author: authorObject._id })
+      } else if (!args.author && args.genre) { 
+        return await Book.find({ genres: {  $all: args.genre } })
+      } else {
+        const authorObject = await Author.findOne({ name: args.author})
+        return await Book.find({ author: authorObject._id, genres: {  $all: args.genre } })
+      }
     },
-    allAuthors: () => authors,
+    allAuthors: async () => await Author.find({}),
+    me: (root, args, context) => {
+      return context.currentUser
+    },
   },
   Author: {
-    bookCount: (root) => {
-      let booklist = books.filter( n => n.author === root.name)
+    bookCount: async (root) => {
+      const booklist = await Book.find( {author: root._id})
       return booklist.length
     },
   },
   Mutation: {
-    addBook: (root, args) => {
-      if (books.find(p => p.title === args.title)) {
-        throw new GraphQLError('Name must be unique', {
+    addBook: async (root, args, context) => {
+      const currentUser = context.currentUser
+      if (!currentUser) {
+        throw new GraphQLError('not authenticated', {
           extensions: {
             code: 'BAD_USER_INPUT',
-            invalidArgs: args.name
           }
         })
       }
-      const book = { ...args, id: uuid() }
-      books = books.concat(book)
-      if (! authors.includes(args.author)) {
-        const newAuthor = {
-          name: args.author,
-          id: uuid(),
-          born: null,
-          bookCount: 1
-        }
-        authors = authors.concat( newAuthor)
+      let authorObject = await Author.findOne({ name: args.author}) 
+      if (!authorObject) {
+        authorObject = new Author ({ name: args.author })
+        authorObject.save()
+      }
+
+      const book = new Book({ ...args, author: authorObject._id})
+      try {
+        await book.save()
+      } catch (error) {
+        throw new GraphQLError('Saving user failed', {
+          extensions: {
+            code: 'BAD_USER_INPUT',
+            invalidArgs: args.name,
+            error
+          }
+        })
       }
       return book
     },
-    editAuthor: (root, args) => {
-      const author = authors.find(p => p.name === args.name)
-      if (!author) {
-        return null
+    editAuthor: async (root, args, context) => {
+      const currentUser = context.currentUser
+      if (!currentUser) {
+        throw new GraphQLError('not authenticated', {
+          extensions: {
+            code: 'BAD_USER_INPUT',
+          }
+        })
+      }
+      let authorObject = await Author.findOne({ name: args.name}) 
+      authorObject.born = args.setBornTo
+
+      try {
+        await authorObject.save()
+      } catch (error) {
+        throw new GraphQLError('Saving number failed', {
+          extensions: {
+            code: 'BAD_USER_INPUT',
+            invalidArgs: args.name,
+            error
+          }
+        })
+      }
+
+      return authorObject
+    },
+    createUser: async (root, args) => {
+      const user = new User({ username: args.username, favoriteGenre: args.favoriteGenre })
+  
+      return user.save()
+        .catch(error => {
+          throw new GraphQLError('Creating the user failed', {
+            extensions: {
+              code: 'BAD_USER_INPUT',
+              invalidArgs: args.username,
+              error
+            }
+          })
+        })
+    },
+    login: async (root, args) => {
+      const user = await User.findOne({ username: args.username })
+  
+      if ( !user || args.password !== 'secret' ) {
+        throw new GraphQLError('wrong credentials', {
+          extensions: {
+            code: 'BAD_USER_INPUT'
+          }
+        })        
       }
   
-      const updatedAuthor = { ...author, born: args.setBornTo }
-      authors = authors.map(p => p.name === args.name ? updatedAuthor : p)
-      return updatedAuthor
-    } 
+      const userForToken = {
+        username: user.username,
+        id: user._id,
+      }
+  
+      return { value: jwt.sign(userForToken, process.env.JWT_SECRET) }
+    }, 
   }
 }
 
@@ -195,6 +295,17 @@ const server = new ApolloServer({
 
 startStandaloneServer(server, {
   listen: { port: 4000 },
+  context: async ({ req, res }) => {
+    const auth = req ? req.headers.authorization : null
+    if (auth && auth.startsWith('Bearer ')) {
+      const decodedToken = jwt.verify(
+        auth.substring(7), process.env.JWT_SECRET
+      )
+      const currentUser = await User
+        .findById(decodedToken.id)
+      return { currentUser }
+    }
+  },
 }).then(({ url }) => {
   console.log(`Server ready at ${url}`)
 })
