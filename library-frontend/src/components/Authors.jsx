@@ -27,7 +27,7 @@ const Authors = (props) => {
     setAuthorname('')
     setBorn('')
   }
-  console.log('authorname is', authorname)
+  console.log('result is', result)
   const authors = result.data.allAuthors
 
   return (
