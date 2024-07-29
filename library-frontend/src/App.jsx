@@ -20,21 +20,27 @@ const App = () => {
       const message = "Added Book " + String(addedBook.title)
       window.alert( message );
     
-      client.refetchQueries({
+      /* client.refetchQueries({
         include: [{ query: ALL_BOOKS, variables: { genre: '' } }, 
           { query: ALL_GENRES },
           { query: ALL_AUTHORS }],
-      })
+      }) */
 
-      /*client.cache.updateQuery({ query: ALL_BOOKS,
-        variables: {
-          genre: ""
-        } }, ({ allBooks }) => {
+      client.cache.updateQuery({ query: ALL_BOOKS, variables: { 
+        genre:"" } }, ({ allBooks }) => {
           return {
             allBooks: allBooks.concat(addedBook),
           }
         }
-      ) */
+      ) 
+      client.cache.updateQuery({ query: ALL_GENRES }, ({ allGenres }) => {
+        allGenres = allGenres.concat(addedBook.genres)
+        let unique = [...new Set(allGenres)]
+          return {
+            allGenres: unique
+          }
+        }
+      )
     }
   })
 
