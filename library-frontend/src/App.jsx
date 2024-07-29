@@ -3,10 +3,9 @@ import Authors from "./components/Authors";
 import Books from "./components/Books";
 import NewBook from "./components/NewBook";
 import Login from "./components/LoginForm";
-import { useApolloClient } from '@apollo/client';
+import { useApolloClient, useSubscription } from '@apollo/client';
 import Recommend from "./components/Recommend";
-
-
+import { BOOK_ADDED, ALL_BOOKS, ALL_AUTHORS, ALL_GENRES} from "./queries";
 
 const App = () => {
   const [page, setPage] = useState("books");
@@ -14,7 +13,30 @@ const App = () => {
   const hideWhenToken = { display: token ? '' : 'none'}
   const showWhenToken = { display: token ? 'none' : ''}
   const client = useApolloClient()
-  const [me, setMe] = useState(null)
+ 
+  useSubscription(BOOK_ADDED, {
+    onData: ({ data, client }) => {
+      const addedBook = data.data.bookAdded
+      const message = "Added Book " + String(addedBook.title)
+      window.alert( message );
+    
+      client.refetchQueries({
+        include: [{ query: ALL_BOOKS, variables: { genre: '' } }, 
+          { query: ALL_GENRES },
+          { query: ALL_AUTHORS }],
+      })
+
+      /*client.cache.updateQuery({ query: ALL_BOOKS,
+        variables: {
+          genre: ""
+        } }, ({ allBooks }) => {
+          return {
+            allBooks: allBooks.concat(addedBook),
+          }
+        }
+      ) */
+    }
+  })
 
   useEffect(() => {
     const loggedUser = window.localStorage.getItem('phonenumbers-user-token')
